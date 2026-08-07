@@ -1,0 +1,7 @@
+services:
+  hubdeck:
+    image: ghcr.io/lys1313013/hubdeck:latest
+    container_name: hubdeck
+    restart: unless-stopped
+    ports:
+      - "8765:80"
