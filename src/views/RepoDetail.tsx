@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchWorkflowRuns, timeAgo, type WorkflowRunSummary } from '../api'
 import StatusBadge from '../components/StatusBadge'
+
+const AUTO_REFRESH_MS = 30_000
 
 export default function RepoDetail({
   owner,
@@ -14,21 +16,31 @@ export default function RepoDetail({
   const [runs, setRuns] = useState<WorkflowRunSummary[] | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const loadingRef = useRef(false)
 
-  const load = async () => {
-    setLoading(true)
-    setError('')
+  const load = async (silent = false) => {
+    if (loadingRef.current) return
+    loadingRef.current = true
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
     try {
       setRuns(await fetchWorkflowRuns(`${owner}/${repo}`, 15))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (!silent) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      loadingRef.current = false
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
     void load()
+    const timer = setInterval(() => {
+      if (!document.hidden) void load(true)
+    }, AUTO_REFRESH_MS)
+    return () => clearInterval(timer)
   }, [owner, repo])
 
   return (

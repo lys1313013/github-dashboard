@@ -1,6 +1,6 @@
 services:
   hubdeck:
-    image: ghcr.io/lys1313013/hubdeck:latest
+    image: crpi-yvha9coypdedaafa.cn-beijing.personal.cr.aliyuncs.com/lys1313013/hubdeck:latest
     container_name: hubdeck
     restart: unless-stopped
     ports:

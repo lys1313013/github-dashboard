@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchDashboard, formatCount, timeAgo, type RepoMeta } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { ForkIcon, StarIcon } from '../components/icons'
 
 type SortKey = 'updated' | 'stars' | 'name'
+
+const AUTO_REFRESH_MS = 60_000
 
 export default function RepoList({
   onSelect,
@@ -15,24 +17,34 @@ export default function RepoList({
   const [repos, setRepos] = useState<RepoMeta[] | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const loadingRef = useRef(false)
   const [search, setSearch] = useState('')
   const [language, setLanguage] = useState('')
   const [sort, setSort] = useState<SortKey>('updated')
 
-  const load = async () => {
-    setLoading(true)
-    setError('')
+  const load = async (silent = false) => {
+    if (loadingRef.current) return
+    loadingRef.current = true
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
     try {
       setRepos(await fetchDashboard())
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (!silent) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      loadingRef.current = false
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
     void load()
+    const timer = setInterval(() => {
+      if (!document.hidden) void load(true)
+    }, AUTO_REFRESH_MS)
+    return () => clearInterval(timer)
   }, [])
 
   const languages = useMemo(() => {
