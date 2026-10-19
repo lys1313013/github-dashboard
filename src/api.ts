@@ -1,5 +1,11 @@
 const BASE = 'https://api.github.com'
 const TOKEN_KEY = 'hubdeck.token'
+const REQUEST_TIMEOUT_MS = 15_000
+const DASHBOARD_CACHE_MS = 60_000
+const ACTIONS_CONCURRENCY = 8
+const MAX_FETCH_ATTEMPTS = 3
+
+let dashboardCache: { token: string; repos: RepoMeta[]; updatedAt: number } | null = null
 
 export type RunStatus = 'success' | 'failure' | 'running' | 'neutral' | 'attention'
 
@@ -8,10 +14,12 @@ export function getToken(): string | null {
 }
 
 export function setToken(token: string): void {
+  dashboardCache = null
   localStorage.setItem(TOKEN_KEY, token)
 }
 
 export function clearToken(): void {
+  dashboardCache = null
   localStorage.removeItem(TOKEN_KEY)
 }
 
@@ -42,6 +50,7 @@ export interface RepoMeta {
   visibility: string
   archived: boolean
   latestRun: WorkflowRunSummary | null
+  workflowState: 'loading' | 'ready' | 'error'
 }
 
 export class GitHubError extends Error {
@@ -51,6 +60,20 @@ export class GitHubError extends Error {
   ) {
     super(message)
   }
+}
+
+export class GitHubNetworkError extends Error {
+  constructor() {
+    super('无法连接 GitHub API，已重试 2 次。请检查网络或代理后点击刷新。')
+    this.name = 'GitHubNetworkError'
+  }
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return '连接 GitHub 超时，请检查网络或代理后重试。'
+  }
+  return error instanceof Error ? error.message : String(error)
 }
 
 function authHeaders(): Record<string, string> {
@@ -63,14 +86,49 @@ function authHeaders(): Record<string, string> {
   }
 }
 
-async function ghFetch(path: string): Promise<Response> {
-  let res = await fetch(`${BASE}${path}`, { headers: authHeaders() })
-  if (res.status === 429) {
-    const retryAfter = Number(res.headers.get('retry-after')) || 5
-    await new Promise((r) => setTimeout(r, retryAfter * 1000))
-    res = await fetch(`${BASE}${path}`, { headers: authHeaders() })
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function ghFetch(path: string, signal?: AbortSignal): Promise<Response> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
+  const options = { headers: authHeaders(), signal: requestSignal }
+  for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt++) {
+    requestSignal.throwIfAborted()
+    let res: Response
+    try {
+      res = await fetch(`${BASE}${path}`, options)
+    } catch (error) {
+      requestSignal.throwIfAborted()
+      // Fetch rejects with TypeError when no HTTP response is available (TLS,
+      // a dropped connection, offline or CORS). Never retry explicit cancellation.
+      if (!(error instanceof TypeError)) throw error
+      if (attempt === MAX_FETCH_ATTEMPTS - 1) throw new GitHubNetworkError()
+      await wait(500 * 2 ** attempt, requestSignal)
+      continue
+    }
+    if (attempt === MAX_FETCH_ATTEMPTS - 1 || ![429, 502, 503, 504].includes(res.status)) {
+      return res
+    }
+    const retryMs = res.status === 429
+      ? (Number(res.headers.get('retry-after')) || 5) * 1000
+      : 500 * 2 ** attempt
+    await res.body?.cancel()
+    await wait(retryMs, requestSignal)
   }
-  return res
+  throw new GitHubNetworkError()
 }
 
 function mapRunStatus(status: string, conclusion: string | null): RunStatus {
@@ -94,11 +152,13 @@ async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results = new Array<R>(items.length)
   let next = 0
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     for (;;) {
+      signal?.throwIfAborted()
       const i = next++
       if (i >= items.length) break
       results[i] = await fn(items[i])
@@ -108,11 +168,17 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-async function fetchReposRaw(): Promise<Omit<RepoMeta, 'latestRun'>[]> {
-  const repos: Array<Omit<RepoMeta, 'latestRun'>> = []
+type RepoMetadata = Omit<RepoMeta, 'latestRun' | 'workflowState'>
+
+async function fetchReposRaw(
+  onPage: (repos: RepoMetadata[]) => void,
+  signal?: AbortSignal,
+): Promise<RepoMetadata[]> {
+  const repos: RepoMetadata[] = []
   let page = 1
   for (;;) {
-    const res = await ghFetch(`/user/repos?per_page=100&page=${page}&sort=updated`)
+    signal?.throwIfAborted()
+    const res = await ghFetch(`/user/repos?per_page=100&page=${page}&sort=updated`, signal)
     if (!res.ok) throw new GitHubError(res.status, await res.text())
     const batch = (await res.json()) as Array<Record<string, unknown>>
     for (const r of batch) {
@@ -131,6 +197,7 @@ async function fetchReposRaw(): Promise<Omit<RepoMeta, 'latestRun'>[]> {
         archived: (r.archived as boolean) ?? false,
       })
     }
+    onPage([...repos])
     if (batch.length < 100) break
     page++
     if (page > 30) break
@@ -138,8 +205,12 @@ async function fetchReposRaw(): Promise<Omit<RepoMeta, 'latestRun'>[]> {
   return repos
 }
 
-export async function fetchWorkflowRuns(fullName: string, perPage = 10): Promise<WorkflowRunSummary[]> {
-  const res = await ghFetch(`/repos/${fullName}/actions/runs?per_page=${perPage}`)
+export async function fetchWorkflowRuns(
+  fullName: string,
+  perPage = 10,
+  signal?: AbortSignal,
+): Promise<WorkflowRunSummary[]> {
+  const res = await ghFetch(`/repos/${fullName}/actions/runs?per_page=${perPage}`, signal)
   if (res.status === 404) return []
   if (!res.ok) throw new GitHubError(res.status, await res.text())
   const data = (await res.json()) as { workflow_runs: Array<Record<string, unknown>> }
@@ -157,17 +228,66 @@ export async function fetchWorkflowRuns(fullName: string, perPage = 10): Promise
   }))
 }
 
-export async function fetchDashboard(): Promise<RepoMeta[]> {
-  const repos = await fetchReposRaw()
-  const latest = await mapWithConcurrency(repos, 8, async (r) => {
+export function getCachedDashboard(): RepoMeta[] | null {
+  return dashboardCache?.token === getToken() ? dashboardCache.repos : null
+}
+
+export async function fetchDashboard({
+  onUpdate,
+  signal,
+  force = false,
+}: {
+  onUpdate?: (repos: RepoMeta[]) => void
+  signal?: AbortSignal
+  force?: boolean
+} = {}): Promise<RepoMeta[]> {
+  signal?.throwIfAborted()
+  const token = getToken()
+  if (!token) throw new GitHubError(401, '未配置 GitHub Token')
+  const cached = dashboardCache?.token === token ? dashboardCache : null
+  if (!force && cached && Date.now() - cached.updatedAt < DASHBOARD_CACHE_MS) {
+    onUpdate?.(cached.repos)
+    return cached.repos
+  }
+
+  const previous = new Map(cached?.repos.map((repo) => [repo.id, repo]))
+  let repos: RepoMeta[] = []
+  const publish = () => {
+    signal?.throwIfAborted()
+    if (getToken() !== token) throw new DOMException('Token 已更换', 'AbortError')
+    // Keep partial results on navigation, but only mark a full refresh as fresh.
+    dashboardCache = { token, repos: [...repos], updatedAt: 0 }
+    onUpdate?.(dashboardCache.repos)
+  }
+
+  await fetchReposRaw((metadata) => {
+    repos = metadata.map((repo) => ({
+      ...repo,
+      latestRun: previous.get(repo.id)?.latestRun ?? null,
+      workflowState: 'loading',
+    }))
+    publish()
+  }, signal)
+
+  await mapWithConcurrency(repos, ACTIONS_CONCURRENCY, async (repo) => {
+    let updated: RepoMeta
     try {
-      const runs = await fetchWorkflowRuns(r.fullName, 1)
-      return runs[0] ?? null
+      const runs = await fetchWorkflowRuns(repo.fullName, 1, signal)
+      updated = { ...repo, latestRun: runs[0] ?? null, workflowState: 'ready' }
     } catch {
-      return null
+      signal?.throwIfAborted()
+      updated = { ...repo, workflowState: 'error' }
     }
-  })
-  return repos.map((r, i) => ({ ...r, latestRun: latest[i] }))
+    repos = repos.map((item) => item.id === updated.id ? updated : item)
+    publish()
+  }, signal)
+
+  signal?.throwIfAborted()
+  if (getToken() === token) {
+    const complete = repos.every((repo) => repo.workflowState === 'ready')
+    dashboardCache = { token, repos, updatedAt: complete ? Date.now() : 0 }
+  }
+  return repos
 }
 
 export function timeAgo(iso: string): string {

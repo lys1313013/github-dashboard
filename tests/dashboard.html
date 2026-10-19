@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>hubdeck 异步加载测试</title></head>
+<body>
+  <aside style="padding:12px 20px;border-bottom:1px solid #30363d">
+    模拟数据测试 · <button id="complete">完成剩余请求</button> · <output id="stats"></output>
+  </aside>
+  <div id="root"></div>
+  <script>
+    // This page uses synthetic credentials in memory and never calls GitHub.
+    const memory = new Map([['hubdeck.token', 'synthetic-browser-test']]);
+    Object.defineProperty(window, 'localStorage', { value: {
+      getItem: key => memory.get(key) ?? null,
+      setItem: (key, value) => memory.set(key, value),
+      removeItem: key => memory.delete(key),
+    }});
+    const metrics = { requests: 0, active: 0, peak: 0, aborted: 0 };
+    const renderStats = () => document.querySelector('#stats').textContent = JSON.stringify(metrics);
+    let released = false;
+    const pending = new Set();
+    document.querySelector('#complete').onclick = () => {
+      released = true;
+      for (const finish of pending) finish();
+    };
+    function pause(ms, signal, hold = false) {
+      return new Promise((resolve, reject) => {
+        signal.throwIfAborted();
+        let timer;
+        const cleanup = () => {
+          clearTimeout(timer);
+          pending.delete(finish);
+          signal.removeEventListener('abort', abort);
+        };
+        const finish = () => { cleanup(); resolve(); };
+        const abort = () => {
+          cleanup();
+          metrics.aborted++;
+          renderStats();
+          reject(signal.reason);
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        if (hold && !released) pending.add(finish);
+        else timer = setTimeout(finish, ms);
+      });
+    }
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (url, options) => {
+      if (!String(url).startsWith('https://api.github.com/')) return nativeFetch(url, options);
+      metrics.requests++;
+      renderStats();
+      const parsed = new URL(url);
+      if (parsed.pathname === '/user/repos') {
+        await pause(200, options.signal);
+        return Response.json(Array.from({ length: 17 }, (_, i) => ({
+          id: i, name: `demo-${String(i).padStart(2, '0')}`, full_name: `test/demo-${i}`,
+          description: '模拟仓库：用于验证并发加载与导航缓存', language: 'TypeScript',
+          stargazers_count: i * 10, forks_count: i,
+          pushed_at: '2026-10-19T00:00:00Z', updated_at: '2026-10-19T00:00:00Z',
+        })));
+      }
+      metrics.active++;
+      metrics.peak = Math.max(metrics.peak, metrics.active);
+      renderStats();
+      try {
+        await pause(400, options.signal, !parsed.pathname.includes('/demo-0/'));
+        return Response.json({ workflow_runs: [{
+          id: 1, run_number: 1, name: 'CI', event: 'push', head_branch: 'main', head_sha: '1234567890',
+          status: 'completed', conclusion: 'success', created_at: '2026-10-19T00:00:00Z',
+          updated_at: '2026-10-19T00:01:00Z', html_url: '#test-run',
+        }] });
+      } finally {
+        metrics.active--;
+        renderStats();
+      }
+    };
+    renderStats();
+  </script>
+  <script type="module" src="/@vite/client"></script>
+  <script type="module">
+    import RefreshRuntime from '/@react-refresh';
+    RefreshRuntime.injectIntoGlobalHook(window);
+    window.$RefreshReg$ = () => {};
+    window.$RefreshSig$ = () => (type) => type;
+    window.__vite_plugin_react_preamble_installed__ = true;
+    await import('/src/main.tsx');
+  </script>
+</body>
+</html>

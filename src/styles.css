@@ -338,6 +338,16 @@ body {
   padding: 40px 0;
 }
 
+.sync-status {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.sync-status:empty {
+  display: none;
+}
+
 .setup {
   max-width: 540px;
   margin: 80px auto;

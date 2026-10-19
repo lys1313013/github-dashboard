@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { fetchWorkflowRuns, timeAgo, type WorkflowRunSummary } from '../api'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { errorMessage, fetchWorkflowRuns, timeAgo, type WorkflowRunSummary } from '../api'
 import StatusBadge from '../components/StatusBadge'
 
 const AUTO_REFRESH_MS = 30_000
@@ -16,32 +16,40 @@ export default function RepoDetail({
   const [runs, setRuns] = useState<WorkflowRunSummary[] | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const loadingRef = useRef(false)
+  const requestRef = useRef<AbortController | null>(null)
 
-  const load = async (silent = false) => {
-    if (loadingRef.current) return
-    loadingRef.current = true
+  const load = useCallback(async (silent = false) => {
+    if (requestRef.current) return
+    const controller = new AbortController()
+    requestRef.current = controller
     if (!silent) {
       setLoading(true)
       setError('')
     }
     try {
-      setRuns(await fetchWorkflowRuns(`${owner}/${repo}`, 15))
+      const nextRuns = await fetchWorkflowRuns(`${owner}/${repo}`, 15, controller.signal)
+      if (!controller.signal.aborted) setRuns(nextRuns)
     } catch (e) {
-      if (!silent) setError(e instanceof Error ? e.message : String(e))
+      if (!silent && !controller.signal.aborted) setError(errorMessage(e))
     } finally {
-      loadingRef.current = false
-      if (!silent) setLoading(false)
+      if (requestRef.current === controller) {
+        requestRef.current = null
+        if (!silent) setLoading(false)
+      }
     }
-  }
+  }, [owner, repo])
 
   useEffect(() => {
     void load()
     const timer = setInterval(() => {
       if (!document.hidden) void load(true)
     }, AUTO_REFRESH_MS)
-    return () => clearInterval(timer)
-  }, [owner, repo])
+    return () => {
+      clearInterval(timer)
+      requestRef.current?.abort()
+      requestRef.current = null
+    }
+  }, [load])
 
   return (
     <div className="page">

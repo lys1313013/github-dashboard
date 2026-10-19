@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchDashboard, formatCount, timeAgo, type RepoMeta } from '../api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { errorMessage, fetchDashboard, formatCount, getCachedDashboard, timeAgo } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { ForkIcon, StarIcon } from '../components/icons'
 
@@ -14,38 +14,57 @@ export default function RepoList({
   onSelect: (fullName: string) => void
   onLogout: () => void
 }) {
-  const [repos, setRepos] = useState<RepoMeta[] | null>(null)
+  const [repos, setRepos] = useState(getCachedDashboard)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const loadingRef = useRef(false)
+  const requestRef = useRef<AbortController | null>(null)
   const [search, setSearch] = useState('')
   const [language, setLanguage] = useState('')
   const [sort, setSort] = useState<SortKey>('updated')
 
-  const load = async (silent = false) => {
-    if (loadingRef.current) return
-    loadingRef.current = true
-    if (!silent) {
-      setLoading(true)
-      setError('')
-    }
+  const load = useCallback(async (force = false) => {
+    if (requestRef.current) return
+    const controller = new AbortController()
+    requestRef.current = controller
+    setLoading(true)
+    setError('')
     try {
-      setRepos(await fetchDashboard())
+      await fetchDashboard({
+        force,
+        signal: controller.signal,
+        onUpdate: (nextRepos) => {
+          if (!controller.signal.aborted) setRepos(nextRepos)
+        },
+      })
     } catch (e) {
-      if (!silent) setError(e instanceof Error ? e.message : String(e))
+      if (!controller.signal.aborted) {
+        setError(errorMessage(e))
+      }
     } finally {
-      loadingRef.current = false
-      if (!silent) setLoading(false)
+      if (requestRef.current === controller) {
+        requestRef.current = null
+        setLoading(false)
+      }
     }
-  }
+  }, [])
 
   useEffect(() => {
     void load()
     const timer = setInterval(() => {
-      if (!document.hidden) void load(true)
+      if (!document.hidden) void load()
     }, AUTO_REFRESH_MS)
-    return () => clearInterval(timer)
-  }, [])
+    const onOnline = () => { void load(true) }
+    window.addEventListener('online', onOnline)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('online', onOnline)
+      requestRef.current?.abort()
+      requestRef.current = null
+    }
+  }, [load])
+
+  const pending = repos?.filter((repo) => repo.workflowState === 'loading').length ?? 0
+  const failed = repos?.filter((repo) => repo.workflowState === 'error').length ?? 0
 
   const languages = useMemo(() => {
     if (!repos) return []
@@ -93,7 +112,7 @@ export default function RepoList({
           <option value="stars">Star 数</option>
           <option value="name">名称</option>
         </select>
-        <button className="refresh" onClick={() => void load()} disabled={loading}>
+        <button className="refresh" onClick={() => void load(true)} disabled={loading}>
           {loading ? '刷新中…' : '刷新'}
         </button>
         <button className="back" onClick={onLogout} title="更换 GitHub Token">
@@ -101,7 +120,13 @@ export default function RepoList({
         </button>
       </header>
 
-      {error && <div className="error">加载失败：{error}</div>}
+      {error && <div className="error" role="alert">
+        {repos ? '刷新失败，已保留已加载的数据：' : '加载失败：'}{error}
+      </div>}
+      <div className="sync-status" role="status">
+        {loading && repos && pending > 0 && `正在加载 Actions 状态（${repos.length - pending} / ${repos.length}）…`}
+        {!loading && failed > 0 && `${failed} 个仓库的 Actions 状态获取失败，可点击刷新重试`}
+      </div>
 
       <div className="repo-grid">
         {repos === null && loading && <div className="loading">加载中…</div>}
@@ -109,7 +134,9 @@ export default function RepoList({
         {filtered.map((r) => (
           <button key={r.id} className="repo-card" onClick={() => onSelect(r.fullName)}>
             <div className="repo-card-head">
-              <StatusBadge status={r.latestRun?.status ?? 'none'} />
+              <StatusBadge status={r.workflowState === 'error' ? 'unknown'
+                : r.workflowState === 'loading' && !r.latestRun ? 'loading'
+                : r.latestRun?.status ?? 'none'} />
               <div className="repo-name" title={r.name}>
                 {r.name}
               </div>
