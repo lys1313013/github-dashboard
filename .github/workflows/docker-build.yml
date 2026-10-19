@@ -56,16 +56,50 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
 
-      - name: Build and push
+      - name: Build and push to GHCR
+        id: ghcr
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64, linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push to Alibaba Cloud ACR
+        id: acr
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64, linux/arm64
+          # ACR rejects the OCI attestation config application/vnd.oci.empty.v1+json.
+          # Export Docker media types without attestations; GHCR keeps its defaults.
+          provenance: false
+          sbom: false
+          outputs: type=registry,oci-mediatypes=false
           tags: |
-            ${{ steps.meta.outputs.tags }}
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/hubdeck:latest
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/hubdeck:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+      - name: Verify published multi-platform images
+        if: github.event_name != 'pull_request'
+        env:
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/hubdeck@${{ steps.ghcr.outputs.digest }}
+          ACR_IMAGE: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/hubdeck:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$GHCR_IMAGE" --raw | jq -e '
+            [.manifests[].platform | "\(.os)/\(.architecture)"]
+            | contains(["linux/amd64", "linux/arm64"])
+          ' > /dev/null
+          docker buildx imagetools inspect "$ACR_IMAGE" --raw | jq -e '
+            .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json"
+            and ([.manifests[].platform | "\(.os)/\(.architecture)"] | sort)
+              == ["linux/amd64", "linux/arm64"]
+          ' > /dev/null
+          echo "Verified GHCR and ACR images contain linux/amd64 and linux/arm64."
