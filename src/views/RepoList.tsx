@@ -92,7 +92,7 @@ export default function RepoList({
   return (
     <div className="page">
       <header className="toolbar">
-        <h1 className="title">hubdeck</h1>
+        <h1 className="title">github-dashboard</h1>
         <input
           className="search"
           placeholder="搜索仓库…"

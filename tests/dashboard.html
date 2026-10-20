@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>hubdeck 异步加载测试</title></head>
+<head><meta charset="UTF-8"><title>github-dashboard 异步加载测试</title></head>
 <body>
   <aside style="padding:12px 20px;border-bottom:1px solid #30363d">
     模拟数据测试 · <button id="complete">完成剩余请求</button> · <output id="stats"></output>
@@ -8,7 +8,7 @@
   <div id="root"></div>
   <script>
     // This page uses synthetic credentials in memory and never calls GitHub.
-    const memory = new Map([['hubdeck.token', 'synthetic-browser-test']]);
+    const memory = new Map([['github-dashboard.token', 'synthetic-browser-test']]);
     Object.defineProperty(window, 'localStorage', { value: {
       getItem: key => memory.get(key) ?? null,
       setItem: (key, value) => memory.set(key, value),

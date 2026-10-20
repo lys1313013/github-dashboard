@@ -16,7 +16,34 @@ globalThis.localStorage = {
   setItem: (key, value) => storage.set(key, value),
   removeItem: (key) => storage.delete(key),
 }
-beforeEach(() => api.setToken('synthetic-token'))
+beforeEach(() => {
+  storage.clear()
+  api.setToken('synthetic-token')
+})
+
+test('migrates a saved token from the previous project name', () => {
+  storage.clear()
+  storage.set('hubdeck.token', 'legacy-synthetic-token')
+  assert.equal(api.getToken(), 'legacy-synthetic-token')
+  assert.equal(storage.get('github-dashboard.token'), 'legacy-synthetic-token')
+  assert.equal(storage.has('hubdeck.token'), false)
+})
+
+test('prefers the current token and removes the legacy token when replacing credentials', () => {
+  storage.set('hubdeck.token', 'legacy-synthetic-token')
+  assert.equal(api.getToken(), 'synthetic-token')
+  api.setToken('replacement-synthetic-token')
+  assert.equal(api.getToken(), 'replacement-synthetic-token')
+  assert.equal(storage.has('hubdeck.token'), false)
+})
+
+test('clears both token keys so legacy credentials cannot restore a signed-out session', () => {
+  storage.set('hubdeck.token', 'legacy-synthetic-token')
+  api.clearToken()
+  assert.equal(api.getToken(), null)
+  assert.equal(storage.has('github-dashboard.token'), false)
+  assert.equal(storage.has('hubdeck.token'), false)
+})
 
 function deferred() {
   let resolve

@@ -1,7 +1,7 @@
 services:
-  hubdeck:
-    image: crpi-yvha9coypdedaafa.cn-beijing.personal.cr.aliyuncs.com/lys1313013/hubdeck:latest
-    container_name: hubdeck
+  github-dashboard:
+    image: crpi-yvha9coypdedaafa.cn-beijing.personal.cr.aliyuncs.com/lys1313013/github-dashboard:latest
+    container_name: github-dashboard
     restart: unless-stopped
     ports:
       - "8765:80"

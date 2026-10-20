@@ -1,5 +1,6 @@
 const BASE = 'https://api.github.com'
-const TOKEN_KEY = 'hubdeck.token'
+const TOKEN_KEY = 'github-dashboard.token'
+const LEGACY_TOKEN_KEY = 'hubdeck.token'
 const REQUEST_TIMEOUT_MS = 15_000
 const DASHBOARD_CACHE_MS = 60_000
 const ACTIONS_CONCURRENCY = 8
@@ -10,17 +11,26 @@ let dashboardCache: { token: string; repos: RepoMeta[]; updatedAt: number } | nu
 export type RunStatus = 'success' | 'failure' | 'running' | 'neutral' | 'attention'
 
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token !== null) return token
+  const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY)
+  if (legacyToken !== null) {
+    localStorage.setItem(TOKEN_KEY, legacyToken)
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  }
+  return legacyToken
 }
 
 export function setToken(token: string): void {
   dashboardCache = null
   localStorage.setItem(TOKEN_KEY, token)
+  localStorage.removeItem(LEGACY_TOKEN_KEY)
 }
 
 export function clearToken(): void {
   dashboardCache = null
   localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(LEGACY_TOKEN_KEY)
 }
 
 export interface WorkflowRunSummary {

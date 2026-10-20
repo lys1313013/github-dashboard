@@ -48,7 +48,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/hubdeck
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/github-dashboard
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
@@ -81,16 +81,16 @@ jobs:
           sbom: false
           outputs: type=registry,oci-mediatypes=false
           tags: |
-            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/hubdeck:latest
-            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/hubdeck:${{ github.sha }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/github-dashboard:latest
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/github-dashboard:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
 
       - name: Verify published multi-platform images
         if: github.event_name != 'pull_request'
         env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/hubdeck@${{ steps.ghcr.outputs.digest }}
-          ACR_IMAGE: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/hubdeck:${{ github.sha }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/github-dashboard@${{ steps.ghcr.outputs.digest }}
+          ACR_IMAGE: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/github-dashboard:${{ github.sha }}
         run: |
           set -euo pipefail
           docker buildx imagetools inspect "$GHCR_IMAGE" --raw | jq -e '
