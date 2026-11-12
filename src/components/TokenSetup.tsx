@@ -1,11 +1,12 @@
 import { useState } from 'react'
+import { GitHubIcon } from './icons'
 
 export default function TokenSetup({ onSave }: { onSave: (token: string) => void }) {
   const [value, setValue] = useState('')
 
   return (
     <div className="setup">
-      <h1>github-dashboard</h1>
+      <h1 className="brand-title"><GitHubIcon />github-dashboard</h1>
       <p>输入你的 GitHub Token，查看仓库和 Actions 状态。</p>
       <ol>
         <li>

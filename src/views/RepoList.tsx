@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage, fetchDashboard, formatCount, getCachedDashboard, timeAgo } from '../api'
 import StatusBadge from '../components/StatusBadge'
-import { ForkIcon, StarIcon } from '../components/icons'
+import { ForkIcon, GitHubIcon, StarIcon } from '../components/icons'
 
 type SortKey = 'updated' | 'stars' | 'name'
 
@@ -92,7 +92,7 @@ export default function RepoList({
   return (
     <div className="page">
       <header className="toolbar">
-        <h1 className="title">github-dashboard</h1>
+        <h1 className="title brand-title"><GitHubIcon />github-dashboard</h1>
         <input
           className="search"
           placeholder="搜索仓库…"

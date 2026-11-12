@@ -59,6 +59,16 @@ body {
   padding: 8px 12px;
 }
 
+.brand-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-title img {
+  flex-shrink: 0;
+}
+
 .select {
   background: var(--panel);
   border: 1px solid var(--border);

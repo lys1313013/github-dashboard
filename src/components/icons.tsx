@@ -2,6 +2,10 @@ interface IconProps {
   size?: number
 }
 
+export function GitHubIcon({ size = 32 }: IconProps) {
+  return <img src={`${import.meta.env.BASE_URL}github.svg`} width={size} height={size} alt="" aria-hidden="true" />
+}
+
 export function StarIcon({ size = 14 }: IconProps) {
   return (
     <svg
